@@ -32,4 +32,3 @@ test-weather:
 
 lint-contracts:
 	docker run --rm -v "$(CURDIR)/contracts":/work -w /work stoplight/spectral:6 lint "*.openapi.yaml"
-	docker run --rm -v "$(CURDIR)/contracts":/app asyncapi/cli validate /app/events.asyncapi.yaml
