@@ -1,0 +1,23 @@
+{
+  "name": "event-bridge",
+  "version": "1.0.0",
+  "description": "Lee los cambios de PostgreSQL (replicación lógica) y los publica como eventos en RabbitMQ",
+  "main": "src/index.js",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "backfill": "node src/backfill.js",
+    "setup-topology": "node src/setup-topology.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "pg": "^8.13.1",
+    "pg-logical-replication": "2.6.0",
+    "pino": "^9.5.0",
+    "prom-client": "^15.1.3"
+  }
+}

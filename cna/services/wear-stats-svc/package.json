@@ -1,0 +1,21 @@
+{
+  "name": "wear-stats-svc",
+  "version": "1.0.0",
+  "description": "S2: cuenta cuántas veces se usó cada outfit, 100 % por eventos",
+  "main": "src/index.js",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9",
+    "fastify": "^5.12.8",
+    "ioredis": "^5.6.1",
+    "pino": "^9.14.0",
+    "prom-client": "^15.1.3"
+  }
+}

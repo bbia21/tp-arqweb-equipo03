@@ -1,0 +1,36 @@
+# event-bridge: corre en VM-1, al lado de PostgreSQL, para que la base nunca salga de la VM.
+# Se une a la red del compose de Libre Closet (/srv/libre-closet) para llegar a "postgres".
+services:
+  event-bridge:
+    build: ../../services/event-bridge
+    image: event-bridge:1.0.0
+    container_name: event-bridge
+    restart: unless-stopped
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DATABASE: closet
+      PG_USER: cna_cdc
+      PG_PASSWORD: "${CDC_PASSWORD}"
+      PG_PUBLICATION: cna_pub
+      PG_SLOT: cna_slot
+      AMQP_URL: "amqp://${RABBIT_USER}:${RABBIT_PASSWORD}@${RABBIT_HOST}:5672"
+      EXCHANGE: closet.events
+    extra_hosts:
+      # Permite llegar a RabbitMQ cuando corre en la misma VM (RABBIT_HOST=host.docker.internal)
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    networks:
+      - closet
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+networks:
+  closet:
+    external: true
+    name: libre-closet_default

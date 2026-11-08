@@ -1,0 +1,140 @@
+# VM-2 (cna-node1): broker + los tres microservicios, cada uno con su propio almacén.
+# Uso (en VM-2):  cd ~/cna/deploy/vm2 && docker compose up -d --build
+# Nota: no usa container_name ni depends_on, así el mismo archivo sirve después para Docker Swarm.
+x-limits-small: &small
+  resources:
+    limits:
+      cpus: "0.5"
+      memory: 192M
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: "${RABBIT_ADMIN_PASSWORD}"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+      - "15692:15692"
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ---------- S1 calendar-svc (Python + PostgreSQL propio) ----------
+  calendar-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: calendar
+      POSTGRES_PASSWORD: "${CALENDAR_DB_PASSWORD}"
+      POSTGRES_DB: calendar
+    volumes:
+      - calendardata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calendar -d calendar"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  calendar-svc:
+    build: ../../services/calendar-svc
+    image: calendar-svc:1.0.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://calendar:${CALENDAR_DB_PASSWORD}@calendar-db:5432/calendar"
+      AMQP_URL: "amqp://${RABBIT_CALENDAR_USER}:${RABBIT_CALENDAR_PASSWORD}@rabbitmq:5672/"
+      QUEUE: calendar.q
+      MONOLITH_PUBLIC_URL: "https://librecloset.arqweb.test"
+      # Verificación opcional contra el monolito (B4). Vacío = desactivada
+      MONOLITH_URL: "${MONOLITH_URL}"
+      SVC_EMAIL: "${SVC_EMAIL}"
+      SVC_PASSWORD: "${SVC_PASSWORD}"
+    extra_hosts:
+      - "librecloset.arqweb.test:${VM1_IP}"
+    ports:
+      - "8001:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy: *small
+
+  # ---------- S2 wear-stats-svc (Node + Redis propio) ----------
+  stats-db:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # AOF: los contadores sobreviven a un reinicio
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - statsdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  wear-stats-svc:
+    build: ../../services/wear-stats-svc
+    image: wear-stats-svc:1.0.0
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://stats-db:6379/0
+      AMQP_URL: "amqp://${RABBIT_STATS_USER}:${RABBIT_STATS_PASSWORD}@rabbitmq:5672"
+      QUEUE: stats.q
+      EXCHANGE: closet.events
+    ports:
+      - "8002:8000"
+    read_only: true
+    deploy: *small
+
+  # ---------- S3 weather-svc (Python + Redis como caché) ----------
+  weather-cache:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  weather-svc:
+    build: ../../services/weather-svc
+    image: weather-svc:1.0.0
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://weather-cache:6379/0
+    ports:
+      - "8003:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy: *small
+
+volumes:
+  rabbitdata:
+  calendardata:
+  statsdata:
