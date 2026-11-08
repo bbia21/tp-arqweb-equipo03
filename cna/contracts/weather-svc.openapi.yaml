@@ -1,0 +1,172 @@
+openapi: 3.1.0
+info:
+  title: weather-svc (S3)
+  version: 1.0.0
+  description: >-
+    Pronóstico del clima por coordenadas. Reemplaza la llamada directa de Libre Closet a Open-Meteo,
+    con caché en Redis (30 min), timeout de 2 s, 3 reintentos con backoff exponencial e interruptor de
+    circuito. Si Open-Meteo no responde, devuelve la última copia guardada (cache=stale) o 503.
+    Expuesto por el gateway en https://api.librecloset.arqweb.test/v2/weather
+  contact:
+    name: Bianca Benítez
+    url: https://github.com/bbia21/tp-arqweb-equipo03
+  license:
+    name: AGPL-3.0
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://api.librecloset.arqweb.test
+    description: Gateway (Nginx, TLS 1.3)
+tags:
+  - name: clima
+    description: Pronóstico
+  - name: operacion
+    description: Salud y métricas
+paths:
+  /v2/weather:
+    get:
+      operationId: getForecast
+      summary: Pronóstico diario
+      description: Pronóstico diario.
+      tags: [clima]
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          description: Latitud.
+          schema: { type: number, minimum: -90, maximum: 90 }
+          example: -25.28
+        - name: lon
+          in: query
+          required: true
+          description: Longitud.
+          schema: { type: number, minimum: -180, maximum: 180 }
+          example: -57.63
+        - name: days
+          in: query
+          description: Cantidad de días (1 a 14).
+          schema: { type: integer, minimum: 1, maximum: 14, default: 7 }
+          example: 3
+        - name: unit
+          in: query
+          description: Unidad de temperatura.
+          schema: { type: string, enum: [celsius, fahrenheit], default: celsius }
+          example: celsius
+      responses:
+        '200':
+          description: Pronóstico (de la caché, de Open-Meteo o de la copia vieja).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Forecast' }
+              example:
+                location: { lat: -25.28, lon: -57.63 }
+                unit: celsius
+                circuit: closed
+                cache: hit
+                days:
+                  - date: '2026-11-08'
+                    weathercode: 1
+                    temperature_max: 23.6
+                    temperature_min: 16.4
+                    precipitation_probability_max: 0
+        '400':
+          description: Parámetros fuera de rango.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: bad_request, detail: lat tiene que estar entre -90 y 90 }
+        '429':
+          description: Se superó el límite de 20 peticiones por segundo del gateway.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: too_many_requests, request_id: 4b1f0c2e9d7a46b3a1c0e2f3d4b5a6c7 }
+        '503':
+          description: Open-Meteo no responde y no hay copia guardada, o el servicio está caído.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: service_unavailable, detail: el pronóstico no está disponible en este momento }
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Proceso vivo
+      description: Proceso vivo.
+      tags: [operacion]
+      responses:
+        '200':
+          description: El proceso responde.
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string } } }
+              example: { status: ok }
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Listo para atender (Redis disponible)
+      description: Listo para atender (Redis disponible).
+      tags: [operacion]
+      responses:
+        '200':
+          description: Listo. Open-Meteo caído no lo hace "no listo", porque puede responder desde la caché.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: ready, cache: true, circuit: closed }
+        '503':
+          description: Redis no responde.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: not_ready, cache: false, circuit: closed }
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Métricas en formato Prometheus
+      description: Métricas en formato Prometheus.
+      tags: [operacion]
+      responses:
+        '200':
+          description: Contadores y histogramas.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: 'weather_cache_total{result="hit"} 7.0'
+components:
+  schemas:
+    Day:
+      type: object
+      required: [date]
+      properties:
+        date: { type: string, format: date }
+        weathercode: { type: [integer, 'null'], description: Código WMO del estado del tiempo. }
+        temperature_max: { type: [number, 'null'] }
+        temperature_min: { type: [number, 'null'] }
+        precipitation_probability_max: { type: [integer, 'null'] }
+    Forecast:
+      type: object
+      required: [location, unit, circuit, cache, days]
+      properties:
+        location:
+          type: object
+          properties:
+            lat: { type: number }
+            lon: { type: number }
+        unit: { type: string, enum: [celsius, fahrenheit] }
+        circuit: { type: string, enum: [closed, open, half_open], description: Estado del interruptor de circuito hacia Open-Meteo. }
+        cache: { type: string, enum: [hit, miss, stale] }
+        days:
+          type: array
+          items: { $ref: '#/components/schemas/Day' }
+    Readiness:
+      type: object
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        cache: { type: boolean }
+        circuit: { type: string }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { type: string }
+        request_id: { type: string }

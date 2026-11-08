@@ -1,0 +1,179 @@
+asyncapi: 3.0.0
+info:
+  title: Eventos de Libre Closet Cloud Native
+  version: 1.0.0
+  description: >-
+    Eventos publicados en el exchange topic `closet.events` de RabbitMQ. La clave de ruteo es el tipo
+    de evento. `closet.*` los genera el event-bridge a partir del WAL de PostgreSQL (CDC);
+    `stats.outfit.worn` lo publica wear-stats-svc.
+
+
+    Versionado: cada evento lleva `version`. Un cambio incompatible se publica como `version: "2"` en
+    paralelo con la versión 1 hasta que todos los consumidores migren; los campos nuevos opcionales
+    no cambian la versión.
+defaultContentType: application/json
+servers:
+  rabbitmq:
+    host: 192.168.56.11:5672
+    protocol: amqp
+    description: RabbitMQ 4.1 en VM-2 (cna-node1)
+channels:
+  calendarCreated:
+    address: closet.calendar.created
+    description: Se agendó un outfit en el calendario.
+    messages:
+      calendarCreated: { $ref: '#/components/messages/CalendarChanged' }
+  calendarUpdated:
+    address: closet.calendar.updated
+    description: Cambió una entrada del calendario (por ejemplo, se marcó como usada).
+    messages:
+      calendarUpdated: { $ref: '#/components/messages/CalendarChanged' }
+  calendarDeleted:
+    address: closet.calendar.deleted
+    description: Se borró una entrada del calendario.
+    messages:
+      calendarDeleted: { $ref: '#/components/messages/CalendarChanged' }
+  outfitCreated:
+    address: closet.outfit.created
+    description: Se creó un outfit.
+    messages:
+      outfitCreated: { $ref: '#/components/messages/OutfitChanged' }
+  outfitUpdated:
+    address: closet.outfit.updated
+    description: Cambió un outfit (por ejemplo, el nombre).
+    messages:
+      outfitUpdated: { $ref: '#/components/messages/OutfitChanged' }
+  outfitDeleted:
+    address: closet.outfit.deleted
+    description: Se borró un outfit.
+    messages:
+      outfitDeleted: { $ref: '#/components/messages/OutfitChanged' }
+  outfitWorn:
+    address: stats.outfit.worn
+    description: S2 registró un nuevo uso de un outfit.
+    messages:
+      outfitWorn: { $ref: '#/components/messages/OutfitWorn' }
+operations:
+  publishCalendarCreated:
+    action: send
+    channel: { $ref: '#/channels/calendarCreated' }
+    summary: El event-bridge publica la creación de una entrada del calendario.
+  publishCalendarUpdated:
+    action: send
+    channel: { $ref: '#/channels/calendarUpdated' }
+    summary: El event-bridge publica la modificación de una entrada del calendario.
+  publishCalendarDeleted:
+    action: send
+    channel: { $ref: '#/channels/calendarDeleted' }
+    summary: El event-bridge publica el borrado de una entrada del calendario.
+  publishOutfitCreated:
+    action: send
+    channel: { $ref: '#/channels/outfitCreated' }
+    summary: El event-bridge publica la creación de un outfit.
+  publishOutfitUpdated:
+    action: send
+    channel: { $ref: '#/channels/outfitUpdated' }
+    summary: El event-bridge publica la modificación de un outfit.
+  publishOutfitDeleted:
+    action: send
+    channel: { $ref: '#/channels/outfitDeleted' }
+    summary: El event-bridge publica el borrado de un outfit.
+  publishOutfitWorn:
+    action: send
+    channel: { $ref: '#/channels/outfitWorn' }
+    summary: wear-stats-svc publica un nuevo uso.
+  receiveCalendarUpdated:
+    action: receive
+    channel: { $ref: '#/channels/calendarUpdated' }
+    summary: calendar-svc (cola calendar.q) y wear-stats-svc (cola stats.q) consumen los cambios del calendario.
+  receiveOutfitUpdated:
+    action: receive
+    channel: { $ref: '#/channels/outfitUpdated' }
+    summary: calendar-svc (cola calendar.q) mantiene los nombres de los outfits.
+components:
+  schemas:
+    Envelope:
+      type: object
+      description: Sobre común de todos los eventos.
+      required: [event_id, type, version, occurred_at, request_id, payload]
+      properties:
+        event_id: { type: string, format: uuid, description: Identificador único; base de la idempotencia. }
+        type: { type: string, description: Igual a la clave de ruteo. }
+        version: { type: string, description: Versión del contrato del evento. }
+        occurred_at: { type: string, format: date-time }
+        request_id: { type: string, description: Id de correlación (en eventos CDC lo genera el bridge). }
+        payload: { type: object }
+    CalendarRow:
+      type: object
+      required: [id, date, outfit_id]
+      properties:
+        id: { type: integer }
+        date: { type: string, format: date-time }
+        outfit_id: { type: integer }
+        owner_id: { type: [integer, 'null'] }
+        worn_at: { type: [string, 'null'], format: date-time }
+        notes: { type: [string, 'null'] }
+        previous:
+          type: [object, 'null']
+          description: Fila anterior (solo en *.updated).
+    OutfitRow:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer }
+        name: { type: [string, 'null'] }
+        notes: { type: [string, 'null'] }
+        owner_id: { type: [integer, 'null'] }
+  messages:
+    CalendarChanged:
+      name: CalendarChanged
+      title: Cambio en el calendario
+      headers:
+        type: object
+        properties:
+          x-request-id: { type: string }
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload: { $ref: '#/components/schemas/CalendarRow' }
+      examples:
+        - name: marcadoComoUsado
+          payload:
+            event_id: 11ff7938-019a-45e9-90ae-5eed9334718d
+            type: closet.calendar.updated
+            version: '1'
+            occurred_at: '2026-11-07T21:25:28.929Z'
+            request_id: 9fe1714e-f927-4f9b-9082-48136618fbfe
+            payload:
+              id: 2
+              date: '2026-11-08T00:00:00.000Z'
+              outfit_id: 3
+              owner_id: 1
+              worn_at: '2026-11-07T21:25:28.900Z'
+              notes: null
+              previous: { id: 2, outfit_id: 3, worn_at: null }
+    OutfitChanged:
+      name: OutfitChanged
+      title: Cambio en un outfit
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload: { $ref: '#/components/schemas/OutfitRow' }
+    OutfitWorn:
+      name: OutfitWorn
+      title: Nuevo uso de un outfit
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                type: object
+                required: [outfit_id]
+                properties:
+                  outfit_id: { type: integer }
+                  worn_at: { type: [string, 'null'], format: date-time }

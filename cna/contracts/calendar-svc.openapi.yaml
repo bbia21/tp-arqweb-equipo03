@@ -1,0 +1,231 @@
+openapi: 3.1.0
+info:
+  title: calendar-svc (S1)
+  version: 1.0.0
+  description: >-
+    Consulta del calendario de outfits de Libre Closet. Se alimenta de los eventos
+    closet.calendar.* y closet.outfit.* (cola calendar.q). Expuesto por el gateway en
+    https://api.librecloset.arqweb.test/v2/calendar
+  contact:
+    name: Bianca Benítez
+    url: https://github.com/bbia21/tp-arqweb-equipo03
+  license:
+    name: AGPL-3.0
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://api.librecloset.arqweb.test
+    description: Gateway (Nginx, TLS 1.3)
+tags:
+  - name: calendario
+    description: Consulta del calendario
+  - name: operacion
+    description: Salud y métricas
+paths:
+  /v2/calendar:
+    get:
+      operationId: listCalendar
+      summary: Entradas del calendario en un rango de fechas
+      description: Si no se indica rango, devuelve desde 7 días antes hasta 7 días después de hoy.
+      tags: [calendario]
+      parameters:
+        - $ref: '#/components/parameters/OwnerId'
+        - name: from
+          in: query
+          description: Primer día del rango (inclusive).
+          schema: { type: string, format: date }
+          example: '2026-11-01'
+        - name: to
+          in: query
+          description: Último día del rango (inclusive).
+          schema: { type: string, format: date }
+          example: '2026-11-30'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Entradas encontradas (puede ser una lista vacía).
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/RequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CalendarPage' }
+              example:
+                from: '2026-11-01'
+                to: '2026-11-30'
+                count: 1
+                entries:
+                  - id: 17
+                    date: '2026-11-08T00:00:00+00:00'
+                    outfit_id: 3
+                    outfit_name: Date
+                    owner_id: 1
+                    worn: true
+                    worn_at: '2026-11-08T21:25:28+00:00'
+                    notes: null
+                    url: https://librecloset.arqweb.test/outfits/3
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /v2/calendar/today:
+    get:
+      operationId: getToday
+      summary: Outfit agendado para hoy
+      description: Outfit agendado para hoy.
+      tags: [calendario]
+      parameters:
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Entradas de hoy.
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/RequestId' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [date, entries]
+                properties:
+                  date: { type: string, format: date }
+                  entries:
+                    type: array
+                    items: { $ref: '#/components/schemas/CalendarEntry' }
+              example:
+                date: '2026-11-08'
+                entries:
+                  - id: 17
+                    date: '2026-11-08T00:00:00+00:00'
+                    outfit_id: 3
+                    outfit_name: Date
+                    owner_id: 1
+                    worn: true
+                    worn_at: '2026-11-08T21:25:28+00:00'
+                    notes: null
+                    url: https://librecloset.arqweb.test/outfits/3
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Proceso vivo
+      description: Proceso vivo.
+      tags: [operacion]
+      responses:
+        '200':
+          description: El proceso responde.
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string } } }
+              example: { status: ok }
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Listo para atender (base y broker disponibles)
+      description: Listo para atender (base y broker disponibles).
+      tags: [operacion]
+      responses:
+        '200':
+          description: Listo.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: ready, database: true, broker: true }
+        '503':
+          description: Alguna dependencia no responde.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: not_ready, database: true, broker: false }
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Métricas en formato Prometheus
+      description: Métricas en formato Prometheus.
+      tags: [operacion]
+      responses:
+        '200':
+          description: Contadores y histogramas.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: 'http_requests_total{code="200",route="/v2/calendar"} 12.0'
+components:
+  parameters:
+    OwnerId:
+      name: owner_id
+      in: query
+      description: Id del usuario dueño en Libre Closet. Sin este parámetro se devuelven todos.
+      schema: { type: integer, minimum: 1 }
+      example: 1
+    RequestId:
+      name: X-Request-ID
+      in: header
+      description: Id de correlación. Lo genera el gateway si el cliente no lo envía.
+      schema: { type: string }
+      example: f167e0ebd1f6c62d83ba5a4eae0a59d1
+  headers:
+    RequestId:
+      description: Id de correlación de la petición.
+      schema: { type: string }
+  schemas:
+    CalendarEntry:
+      type: object
+      required: [id, date, outfit_id, worn, url]
+      properties:
+        id: { type: integer }
+        date: { type: string, format: date-time, description: Día agendado (medianoche UTC, como lo guarda Libre Closet). }
+        outfit_id: { type: integer }
+        outfit_name: { type: [string, 'null'] }
+        owner_id: { type: [integer, 'null'] }
+        worn: { type: boolean }
+        worn_at: { type: [string, 'null'], format: date-time }
+        notes: { type: [string, 'null'] }
+        url: { type: string, format: uri, description: Página del outfit en el monolito. }
+    CalendarPage:
+      type: object
+      required: [from, to, count, entries]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        count: { type: integer }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/CalendarEntry' }
+    Readiness:
+      type: object
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        database: { type: boolean }
+        broker: { type: boolean }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { type: string }
+        request_id: { type: string }
+  responses:
+    BadRequest:
+      description: Parámetros inválidos.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: invalid_range, detail: "'to' tiene que ser igual o posterior a 'from'" }
+    NotFound:
+      description: No hay datos para la consulta.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: not_found, detail: no hay outfit agendado para hoy }
+    TooManyRequests:
+      description: Se superó el límite de 20 peticiones por segundo del gateway.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: too_many_requests, request_id: 4b1f0c2e9d7a46b3a1c0e2f3d4b5a6c7 }
+    Unavailable:
+      description: El servicio no está disponible (respuesta JSON uniforme del gateway).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: service_unavailable, detail: el servicio no esta disponible, request_id: f167e0ebd1f6c62d83ba5a4eae0a59d1 }

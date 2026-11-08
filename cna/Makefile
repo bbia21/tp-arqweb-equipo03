@@ -3,7 +3,8 @@
 #   make down     baja la parte cloud native (el monolito sigue corriendo)
 #   make status   estado de los contenedores en los dos nodos
 #   make test     pruebas automatizadas de todos los servicios
-.PHONY: up down status test test-bridge test-stats test-calendar test-weather
+#   make lint-contracts   valida OpenAPI (Spectral) y AsyncAPI (F5-E4)
+.PHONY: up down status lint-contracts test test-bridge test-stats test-calendar test-weather
 
 up:
 	bash deploy/up.sh
@@ -28,3 +29,7 @@ test-calendar:
 
 test-weather:
 	docker run --rm -v "$(CURDIR)/services/weather-svc":/app -w /app python:3.12-slim sh -c "pip install -q -r requirements.txt pytest && python -m pytest -q -p no:cacheprovider"
+
+lint-contracts:
+	docker run --rm -v "$(CURDIR)/contracts":/work -w /work stoplight/spectral:6 lint "*.openapi.yaml"
+	docker run --rm -v "$(CURDIR)/contracts":/app asyncapi/cli validate /app/events.asyncapi.yaml

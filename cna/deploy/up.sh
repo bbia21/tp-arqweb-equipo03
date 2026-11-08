@@ -108,7 +108,10 @@ ok "exchange closet.events, colas calendar.q / stats.q, DLQ y usuarios bridge / 
 
 # ---------------------------------------------------------------- 5. Servicios
 paso "5/7 Microservicios en VM-2 (S1, S2, S3 y sus almacenes)"
-"${DC2[@]}" up -d --build --wait
+# Se construyen solo los servicios (RabbitMQ ya se construyó en el paso 4): si se reconstruye
+# dos veces, la etiqueta pasa a otra imagen y el contenedor de RabbitMQ queda mostrando un id.
+"${DC2[@]}" build calendar-svc wear-stats-svc weather-svc
+"${DC2[@]}" up -d --wait
 ok "servicios healthy en VM-2"
 
 paso "6/7 event-bridge en VM-1"
