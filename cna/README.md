@@ -13,10 +13,11 @@ cna/
 │   ├── wear-stats-svc/    S2 · Node/Fastify + Redis propio
 │   └── weather-svc/       S3 · Python/FastAPI + Redis como caché
 ├── deploy/
-│   ├── vm1/               compose del event-bridge (corre al lado de PostgreSQL)
+│   ├── vm1/               compose del event-bridge + configuración del gateway Nginx
 │   ├── vm2/               compose de RabbitMQ + S1, S2, S3 y sus almacenes
 │   └── rabbitmq/          compose de RabbitMQ (prueba en VM-1) + usuarios por servicio
-├── Makefile               make test: pruebas de todos los servicios
+├── deploy/up.sh, down.sh  despliegue y baja en un comando
+├── Makefile               make up / down / status / test
 └── README.md
 ```
 
@@ -35,56 +36,32 @@ Comportamiento ante fallas de los consumidores (S1, S2):
 - evento inválido → `nack` sin reencolar → `closet.dlq`
 - error transitorio → `nack` con reencolado; a los 5 intentos RabbitMQ lo manda a `closet.dlq`
 
-## Paso a paso de esta noche (todo en VM-1)
+## Despliegue en un comando (CA-7)
 
-Requisito previo: en PostgreSQL ya existen el rol `cna_cdc`, la publicación `cna_pub` y `wal_level=logical`.
+Requisitos previos de infraestructura (una sola vez):
 
-### 1. RabbitMQ
+1. VM-1 (`librecloset`, 192.168.56.10): monolito del TP I corriendo en `/srv/libre-closet`
+   (Libre Closet 0.6.0 + PostgreSQL con `wal_level=logical`) y Nginx con el certificado del sitio.
+2. VM-2 (`cna-node1`, 192.168.56.11): Docker instalado y UFW + `DOCKER-USER` configurados.
+3. SSH sin contraseña de VM-1 a VM-2: `ssh-copy-id admins@192.168.56.11`.
 
-```bash
-cd ~/cna/deploy/rabbitmq
-cp .env.example .env
-sed -i "s/^RABBIT_ADMIN_PASSWORD=.*/RABBIT_ADMIN_PASSWORD=$(openssl rand -hex 12)/" .env
-sed -i "s/^RABBIT_BRIDGE_PASSWORD=.*/RABBIT_BRIDGE_PASSWORD=$(openssl rand -hex 12)/" .env
-docker compose up -d
-docker compose ps        # esperar a que diga (healthy)
-```
-
-### 2. Configuración del event-bridge
+Despliegue, desde VM-1 en la carpeta `cna/`:
 
 ```bash
-cd ~/cna/deploy/vm1
-{
-  grep '^CDC_PASSWORD=' /srv/libre-closet/.env
-  echo "RABBIT_USER=admin"
-  grep '^RABBIT_ADMIN_PASSWORD=' ../rabbitmq/.env | sed 's/^RABBIT_ADMIN_PASSWORD=/RABBIT_PASSWORD=/'
-  echo "RABBIT_HOST=host.docker.internal"
-} > .env
-chmod 600 .env
-cat .env                 # tienen que aparecer las 4 variables con valor
+make up        # CDC + RabbitMQ + S1, S2, S3 + event-bridge + gateway, y prueba de humo
+make status    # contenedores de los dos nodos
+make down      # baja la parte cloud native (BORRAR_DATOS=1 make down borra también los volúmenes)
 ```
 
-### 3. Construir la imagen y crear la topología (exchanges, colas, DLQ)
+`make up` genera las contraseñas que falten en `deploy/vm1/.env` y `deploy/vm2/.env` (no se versionan;
+ver los `.env.example`), etiqueta las imágenes como `1.0.0-<hash del commit>` y despliega VM-2 por SSH
+con un contexto de Docker (`cna-node1`).
+
+### Carga inicial del índice de S1 (solo la primera vez)
 
 ```bash
-docker compose build
-docker compose run --rm event-bridge node src/setup-topology.js
+docker compose -p vm1 -f deploy/vm1/docker-compose.yml --env-file deploy/vm1/.env run --rm event-bridge node src/backfill.js
 ```
-
-### 4. Levantar el bridge y hacer la carga inicial
-
-```bash
-docker compose up -d
-docker compose logs -f event-bridge      # Ctrl+C para salir
-docker compose run --rm event-bridge node src/backfill.js
-```
-
-### 5. Probar: un cambio en el calendario llega a RabbitMQ
-
-1. Agendar un outfit o marcarlo como usado en https://librecloset.arqweb.test
-2. En los logs del bridge aparece `Evento publicado` con `type: closet.calendar.created` o `updated`.
-3. En la consola de RabbitMQ (http://127.0.0.1:15672, usuario `admin`) → Queues → `debug.q` → Get messages.
-   Captura = evidencia F6-E12.
 
 ### Pruebas automatizadas
 

@@ -1,6 +1,19 @@
-# Pruebas de todos los servicios con un solo comando: make test
-# No hace falta tener Node ni Python instalados: corre cada suite dentro de un contenedor.
-.PHONY: test test-bridge test-stats test-calendar test-weather
+# Uso (en VM-1, dentro del repositorio):
+#   make up       despliega todo (CDC, RabbitMQ, S1, S2, S3, event-bridge, gateway) en un comando
+#   make down     baja la parte cloud native (el monolito sigue corriendo)
+#   make status   estado de los contenedores en los dos nodos
+#   make test     pruebas automatizadas de todos los servicios
+.PHONY: up down status test test-bridge test-stats test-calendar test-weather
+
+up:
+	bash deploy/up.sh
+
+down:
+	bash deploy/down.sh
+
+status:
+	@echo "== VM-1 ($$(hostname))"; docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+	@echo; echo "== VM-2 (cna-node1)"; docker --context cna-node1 ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
 
 test: test-bridge test-stats test-calendar test-weather
 

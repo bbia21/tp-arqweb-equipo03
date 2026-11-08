@@ -1,5 +1,5 @@
 # VM-2 (cna-node1): broker + los tres microservicios, cada uno con su propio almacén.
-# Uso (en VM-2):  cd ~/cna/deploy/vm2 && docker compose up -d --build
+# Uso normal: desde VM-1, make up (despliega en VM-2 por SSH con un contexto de Docker)
 # Nota: no usa container_name ni depends_on, así el mismo archivo sirve después para Docker Swarm.
 x-limits-small: &small
   resources:
@@ -9,7 +9,8 @@ x-limits-small: &small
 
 services:
   rabbitmq:
-    image: rabbitmq:4.1-management-alpine
+    build: ../rabbitmq
+    image: cna-rabbitmq:${IMAGE_TAG:-1.0.0}
     hostname: rabbitmq
     restart: unless-stopped
     environment:
@@ -21,7 +22,6 @@ services:
       - "15692:15692"
     volumes:
       - rabbitdata:/var/lib/rabbitmq
-      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -54,7 +54,7 @@ services:
 
   calendar-svc:
     build: ../../services/calendar-svc
-    image: calendar-svc:1.0.0
+    image: calendar-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgresql://calendar:${CALENDAR_DB_PASSWORD}@calendar-db:5432/calendar"
@@ -65,6 +65,7 @@ services:
       MONOLITH_URL: "${MONOLITH_URL}"
       SVC_EMAIL: "${SVC_EMAIL}"
       SVC_PASSWORD: "${SVC_PASSWORD}"
+      MONOLITH_TIMEOUT_SECONDS: "3"
     extra_hosts:
       - "librecloset.arqweb.test:${VM1_IP}"
     ports:
@@ -94,7 +95,7 @@ services:
 
   wear-stats-svc:
     build: ../../services/wear-stats-svc
-    image: wear-stats-svc:1.0.0
+    image: wear-stats-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
       REDIS_URL: redis://stats-db:6379/0
@@ -123,7 +124,7 @@ services:
 
   weather-svc:
     build: ../../services/weather-svc
-    image: weather-svc:1.0.0
+    image: weather-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
       REDIS_URL: redis://weather-cache:6379/0

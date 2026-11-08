@@ -3,7 +3,7 @@
 services:
   event-bridge:
     build: ../../services/event-bridge
-    image: event-bridge:1.0.0
+    image: event-bridge:${IMAGE_TAG:-1.0.0}
     container_name: event-bridge
     restart: unless-stopped
     environment:
