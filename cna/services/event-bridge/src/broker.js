@@ -2,6 +2,7 @@
 // que guardó el mensaje, el bridge le avisa a PostgreSQL que puede avanzar (cero pérdida).
 const amqp = require('amqplib');
 const logger = require('./logger');
+const tracing = require('./tracing');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -34,7 +35,7 @@ async function publish(channel, exchange, event) {
     messageId: event.event_id,
     type: event.type,
     timestamp: Math.floor(Date.now() / 1000),
-    headers: { 'x-request-id': event.request_id },
+    headers: tracing.inject({ 'x-request-id': event.request_id }), // + traceparent
   });
   await channel.waitForConfirms();
 }

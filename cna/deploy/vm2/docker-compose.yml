@@ -57,6 +57,7 @@ services:
     image: calendar-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318   # trazas a Jaeger (stack obs)
       DATABASE_URL: "postgresql://calendar:${CALENDAR_DB_PASSWORD}@calendar-db:5432/calendar"
       AMQP_URL: "amqp://${RABBIT_CALENDAR_USER}:${RABBIT_CALENDAR_PASSWORD}@rabbitmq:5672/"
       QUEUE: calendar.q
@@ -98,6 +99,7 @@ services:
     image: wear-stats-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318   # trazas a Jaeger (stack obs)
       ACK_DELAY_MS: "${STATS_ACK_DELAY_MS:-0}"   # solo para X3 (Fase 7)
       REDIS_URL: redis://stats-db:6379/0
       AMQP_URL: "amqp://${RABBIT_STATS_USER}:${RABBIT_STATS_PASSWORD}@rabbitmq:5672"
@@ -128,6 +130,7 @@ services:
     image: weather-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318   # trazas a Jaeger (stack obs)
       REDIS_URL: redis://weather-cache:6379/0
     ports:
       - "8003-8005:8000"   # rango: permite docker compose up --scale weather-svc=3 (C2)

@@ -7,6 +7,7 @@ services:
     container_name: event-bridge
     restart: unless-stopped
     environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://${VM2_IP:-192.168.56.11}:4318"   # trazas a Jaeger en VM-2
       PG_HOST: postgres
       PG_PORT: "5432"
       PG_DATABASE: closet

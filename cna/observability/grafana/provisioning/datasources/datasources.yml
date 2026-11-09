@@ -13,3 +13,15 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      # Desde una línea de log con trace_id se salta directo a la traza en Jaeger
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id":\s*"(\w+)"'
+          datasourceUid: jaeger
+          url: '$${__value.raw}'
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686

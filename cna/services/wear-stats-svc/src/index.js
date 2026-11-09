@@ -1,9 +1,13 @@
 // S2 wear-stats-svc: consume closet.calendar.* de stats.q y lleva la cuenta de usos por outfit.
+const tracing = require('./tracing');
+
+tracing.setup('wear-stats-svc');
 const Fastify = require('fastify');
 const amqp = require('amqplib');
 const Redis = require('ioredis');
 const pino = require('pino');
 const client = require('prom-client');
+const { trace } = require('@opentelemetry/api');
 const { randomUUID } = require('node:crypto');
 const { wornDelta, InvalidEvent, APPLY_SCRIPT, PROCESSED_TTL_SECONDS, keysFor } = require('./logic');
 
@@ -38,27 +42,45 @@ const state = { brokerConnected: false };
 const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 3 });
 redis.defineCommand('applyWorn', { numberOfKeys: 3, lua: APPLY_SCRIPT });
 
+// Continúa la traza que empezó el event-bridge (header traceparent del mensaje)
 async function handle(channel, publishChannel, msg) {
+  const headers = msg.properties.headers || {};
+  return tracing.inSpan(`consumir ${msg.properties.type || 'desconocido'}`, {
+    kind: tracing.SpanKind.CONSUMER,
+    attributes: {
+      'messaging.system': 'rabbitmq',
+      'messaging.destination.name': config.queue,
+      'messaging.message.id': String(msg.properties.messageId || ''),
+      'messaging.rabbitmq.redelivered': Boolean(msg.fields.redelivered),
+      request_id: String(headers['x-request-id'] || '-'),
+    },
+  }, (span) => handleInSpan(channel, publishChannel, msg, span), tracing.extract(headers));
+}
+
+async function handleInSpan(channel, publishChannel, msg, span) {
   const requestId = (msg.properties.headers && msg.properties.headers['x-request-id']) || '-';
   const type = msg.properties.type || 'desconocido';
   try {
     const event = JSON.parse(msg.content.toString());
     const { delta, outfitId, wornAt } = wornDelta(event);
-    const applied = await redis.applyWorn(
-      ...keysFor(event.event_id, outfitId ?? 'none'),
-      PROCESSED_TTL_SECONDS, delta, String(outfitId ?? ''), wornAt || '',
-    );
+    const applied = await tracing.inSpan('redis: aplicar uso (Lua, idempotente)', { attributes: { 'db.system': 'redis', delta } },
+      () => redis.applyWorn(
+        ...keysFor(event.event_id, outfitId ?? 'none'),
+        PROCESSED_TTL_SECONDS, delta, String(outfitId ?? ''), wornAt || '',
+      ));
     if (applied === 1 && delta > 0 && config.publishWorn) {
       const out = {
         event_id: randomUUID(), type: 'stats.outfit.worn', version: '1',
         occurred_at: new Date().toISOString(), request_id: requestId,
         payload: { outfit_id: outfitId, worn_at: wornAt },
       };
-      publishChannel.publish(config.exchange, out.type, Buffer.from(JSON.stringify(out)), {
-        persistent: true, contentType: 'application/json', messageId: out.event_id, type: out.type,
-        headers: { 'x-request-id': requestId },
+      await tracing.inSpan(`publicar ${out.type}`, { kind: tracing.SpanKind.PRODUCER }, async () => {
+        publishChannel.publish(config.exchange, out.type, Buffer.from(JSON.stringify(out)), {
+          persistent: true, contentType: 'application/json', messageId: out.event_id, type: out.type,
+          headers: tracing.inject({ 'x-request-id': requestId }),
+        });
+        await publishChannel.waitForConfirms();
       });
-      await publishChannel.waitForConfirms();
     }
     if (config.ackDelayMs > 0) {
       log.warn({ request_id: requestId, event_id: event.event_id }, `evento aplicado; ack en ${config.ackDelayMs} ms (X3)`);
@@ -66,15 +88,18 @@ async function handle(channel, publishChannel, msg) {
     }
     channel.ack(msg);
     const result = applied === 1 ? 'processed' : 'duplicate';
+    span.setAttribute('resultado', result);
     eventsConsumed.inc({ type, result });
-    log.info({ request_id: requestId, type, event_id: event.event_id, delta, result }, `evento ${result}`);
+    log.info({ request_id: requestId, type, event_id: event.event_id, delta, result, trace_id: tracing.currentTraceId() }, `evento ${result}`);
   } catch (err) {
     if (err instanceof InvalidEvent || err instanceof SyntaxError) {
       channel.nack(msg, false, false); // directo a la DLQ
+      span.setStatus({ code: tracing.SpanStatusCode.ERROR, message: 'enviado a la DLQ' });
       eventsConsumed.inc({ type, result: 'dead_lettered' });
       log.error({ request_id: requestId, type, err: err.message }, 'evento inválido enviado a la DLQ');
     } else {
       channel.nack(msg, false, true); // se reintenta; tras 5 intentos va a la DLQ
+      span.setStatus({ code: tracing.SpanStatusCode.ERROR, message: 'se reintenta' });
       eventsConsumed.inc({ type, result: 'retry' });
       log.error({ request_id: requestId, type, err: err.message }, 'error transitorio, se reintenta');
     }
@@ -111,12 +136,23 @@ function buildApp() {
 
   app.addHook('onRequest', async (req, reply) => {
     req.requestId = req.headers['x-request-id'] || randomUUID();
+    const path = req.url.split('?')[0];
+    if (!['/healthz', '/readyz', '/metrics'].includes(path)) {
+      req.span = trace.getTracer('libre-closet-cna').startSpan(`${req.method} ${req.routeOptions.url || path}`,
+        { kind: tracing.SpanKind.SERVER, attributes: { 'http.request.method': req.method, 'url.path': path, request_id: req.requestId } },
+        tracing.extract(req.headers));
+    }
     req.timer = httpDuration.startTimer({ route: req.routeOptions.url || req.url.split('?')[0] });
     reply.header('X-Request-ID', req.requestId);
   });
   app.addHook('onResponse', async (req, reply) => {
     const route = req.routeOptions.url || req.url.split('?')[0];
     req.timer();
+    if (req.span) {
+      req.span.setAttribute('http.response.status_code', reply.statusCode);
+      if (reply.statusCode >= 500) req.span.setStatus({ code: tracing.SpanStatusCode.ERROR });
+      req.span.end();
+    }
     httpRequests.inc({ route, code: reply.statusCode });
     if (!['/healthz', '/readyz', '/metrics'].includes(route)) {
       log.info({ request_id: req.requestId, route, code: reply.statusCode }, `${req.method} ${req.url} ${reply.statusCode}`);

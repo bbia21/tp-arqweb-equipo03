@@ -147,5 +147,5 @@ printf '    S2  /v2/stats/outfits/top    -> %s\n' "$(api /v2/stats/outfits/top)"
 printf '    S3  /v2/weather              -> %s\n' "$(api '/v2/weather?lat=-25.28&lon=-57.63&days=1')"
 
 printf '\n\033[1;32mListo en %s segundos.\033[0m\n' "$(( $(date +%s) - INICIO ))"
-printf '    Grafana:    ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 admins@127.0.0.1  (desde Windows)\n'
+printf '    Grafana:    ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 -L 16686:localhost:16686 admins@127.0.0.1  (desde Windows)\n'
 printf '                luego http://localhost:3000  (usuario admin, clave: GRAFANA_ADMIN_PASSWORD en deploy/vm2/.env)\n'

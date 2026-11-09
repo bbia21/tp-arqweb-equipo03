@@ -13,9 +13,11 @@ from .config import settings
 from .consumer import Consumer
 from .handlers import to_response
 from .monolith import MonolithClient
+from .tracing import setup_tracing
 from .observability import RequestContextMiddleware, setup_logging
 
 log = setup_logging(settings.service_name)
+setup_tracing(settings.service_name)
 state: dict = {}
 
 

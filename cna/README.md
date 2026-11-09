@@ -92,10 +92,11 @@ docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c "npm ci && npm test"
 ## Observabilidad, caos y carga (Fase 7)
 
 `make up` también levanta, en VM-2, Prometheus (métricas y alertas), Loki + Promtail (logs de los
-dos nodos y del gateway) y Grafana con el tablero RED ya cargado. Se accede por túnel SSH:
+dos nodos y del gateway), Jaeger (trazas distribuidas con OpenTelemetry) y Grafana con el tablero RED
+ya cargado. Se accede por túnel SSH:
 
 ```powershell
-ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 admins@127.0.0.1
+ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 -L 16686:localhost:16686 admins@127.0.0.1
 ```
 
 - `observability/` — configuración de Prometheus, alertas, Loki/Promtail y Grafana (se copian dentro de las imágenes).

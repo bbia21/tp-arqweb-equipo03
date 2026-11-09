@@ -7,6 +7,8 @@ responde, el servicio degrada: guarda la entrada igual y lo deja registrado en e
 import logging
 import os
 
+from .tracing import SpanKind, Status, StatusCode, inject, tracer
+
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -67,17 +69,29 @@ class MonolithClient:
     async def _get_outfit(self, outfit_id: int) -> int:
         if not self.logged_in:
             await self._login()
-        response = await self.client.get(f"{self.base_url}/outfits/{outfit_id}")
-        if response.status_code in (301, 302, 401):  # sesión vencida
-            self.logged_in = False
-            await self._login()
-            response = await self.client.get(f"{self.base_url}/outfits/{outfit_id}")
-        return response.status_code
+        with tracer.start_as_current_span(f"GET /outfits/{outfit_id}", kind=SpanKind.CLIENT,
+                                          attributes={"server.address": "librecloset.arqweb.test"}) as span:
+            response = await self.client.get(f"{self.base_url}/outfits/{outfit_id}", headers=inject({}))
+            if response.status_code in (301, 302, 401):  # sesión vencida
+                self.logged_in = False
+                await self._login()
+                response = await self.client.get(f"{self.base_url}/outfits/{outfit_id}", headers=inject({}))
+            span.set_attribute("http.response.status_code", response.status_code)
+            return response.status_code
 
     async def outfit_exists(self, outfit_id: int) -> bool | None:
         """True / False si el monolito respondió; None si no se pudo verificar (degradación)."""
         if not self.enabled:
             return None
+        with tracer.start_as_current_span("monolito: verificar outfit", attributes={"outfit_id": outfit_id}) as span:
+            result = await self._outfit_exists(outfit_id)
+            span.set_attribute("circuito", self.breaker.state)
+            span.set_attribute("resultado", "degradado" if result is None else str(result).lower())
+            if result is None:
+                span.set_status(Status(StatusCode.ERROR, "no se pudo verificar (degradación)"))
+            return result
+
+    async def _outfit_exists(self, outfit_id: int) -> bool | None:
         self._check_rotation()
         try:
             self.breaker.before_call()

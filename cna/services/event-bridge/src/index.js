@@ -1,6 +1,9 @@
 // event-bridge: lee el WAL de PostgreSQL por replicación lógica (CDC) y publica
 // cada cambio de outfit / outfit_calendar como evento en RabbitMQ.
 // No toca el código de Libre Closet: solo lee lo que la base ya registra.
+const tracing = require('./tracing');
+
+tracing.setup('event-bridge');
 const http = require('node:http');
 const { Client } = require('pg');
 const { LogicalReplicationService, PgoutputPlugin } = require('pg-logical-replication');
@@ -95,14 +98,26 @@ async function main() {
     }
     if (message.tag === 'commit') {
       try {
+        // Cada evento abre su propia traza: es el comienzo de "marcar uso -> S1 / S2"
         for (const event of pending) {
-          await broker.publish(channel, config.exchange, event);
+          await tracing.inSpan(`cdc ${event.type}`, {
+            kind: tracing.SpanKind.PRODUCER,
+            attributes: {
+              'messaging.system': 'rabbitmq',
+              'messaging.destination.name': config.exchange,
+              'messaging.message.id': event.event_id,
+              request_id: event.request_id,
+              lsn: String(lsn),
+            },
+          }, async () => {
+            await broker.publish(channel, config.exchange, event);
+            logger.info(
+              { request_id: event.request_id, event_id: event.event_id, type: event.type, trace_id: tracing.currentTraceId() },
+              'Evento publicado',
+            );
+          });
           metrics.eventsPublished.inc({ type: event.type });
           metrics.lastEventTimestamp.setToCurrentTime();
-          logger.info(
-            { request_id: event.request_id, event_id: event.event_id, type: event.type },
-            'Evento publicado',
-          );
         }
         pending = [];
         await service.acknowledge(message.commitEndLsn || lsn);

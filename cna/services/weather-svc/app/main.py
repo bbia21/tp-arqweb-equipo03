@@ -18,9 +18,13 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 from .breaker import CircuitBreaker, CircuitOpenError
 from .config import settings
 from .forecast import BadRequest, build_params, cache_key, parse, validate
+from opentelemetry import trace as otel_trace
+
+from .tracing import SpanKind, setup_tracing, tracer
 from .observability import RequestContextMiddleware, setup_logging
 
 log = setup_logging(settings.service_name)
+setup_tracing(settings.service_name)
 CACHE = Counter("weather_cache_total", "Resultado de la caché", ["result"])
 UPSTREAM = Counter("weather_upstream_total", "Llamadas a Open-Meteo por resultado", ["result"])
 
@@ -55,8 +59,13 @@ async def _fetch(lat: float, lon: float, unit: str) -> dict:
             retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
             reraise=True,
         ):
-            with attempt:
+            with attempt, tracer.start_as_current_span(
+                "GET api.open-meteo.com/v1/forecast", kind=SpanKind.CLIENT,
+                attributes={"server.address": "api.open-meteo.com",
+                            "intento": attempt.retry_state.attempt_number},
+            ) as span:
                 response = await state["http"].get(settings.open_meteo_url, params=build_params(lat, lon, unit))
+                span.set_attribute("http.response.status_code", response.status_code)
                 response.raise_for_status()
                 data = response.json()
     except (httpx.TransportError, httpx.HTTPStatusError):
@@ -107,7 +116,9 @@ async def get_weather(
     key = cache_key(lat, lon, unit, date.today())
     body = {"location": {"lat": round(lat, 2), "lon": round(lon, 2)}, "unit": unit, "circuit": breaker.state}
 
-    cached = await state["redis"].get(key)
+    with tracer.start_as_current_span("redis: leer caché", attributes={"db.system": "redis"}):
+        cached = await state["redis"].get(key)
+    otel_trace.get_current_span().set_attribute("cache", "hit" if cached else "miss")
     if cached:
         CACHE.labels(result="hit").inc()
         return {**body, "cache": "hit", "days": parse(json.loads(cached), days)}

@@ -40,17 +40,19 @@ alias dc2='docker --context cna-node1 compose -p vm2 -f deploy/vm2/docker-compos
    ```
 
    Tenés que ver, además de lo de siempre, `obs-prometheus-1`, `obs-loki-1`, `obs-promtail-1`,
-   `obs-grafana-1` en VM-2 y `promtail` en VM-1.
+   `obs-jaeger-1`, `obs-grafana-1` en VM-2 y `promtail` en VM-1.
 
 3. Abrí el túnel para ver Grafana y Prometheus **desde Windows** (PowerShell nuevo, dejalo abierto):
 
    ```powershell
-   ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 admins@127.0.0.1
+   ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 -L 16686:localhost:16686 admins@127.0.0.1
    ```
 
    - Grafana: <http://localhost:3000> — usuario `admin`. La contraseña la ves en VM-1 con
      `grep GRAFANA_ADMIN_PASSWORD deploy/vm2/.env`.
    - Prometheus: <http://localhost:9090/targets> — todos los *targets* tienen que estar en **UP**.
+   - Jaeger (trazas): <http://localhost:16686> — en *Service* tienen que aparecer `event-bridge`,
+     `calendar-svc`, `wear-stats-svc` y `weather-svc` (aparecen después del primer pedido o evento).
 
    Si un target de los servicios está DOWN, mirá `docker --context cna-node1 logs obs-prometheus-1 | tail`.
    Si `event-bridge` está DOWN, revisá que VM-2 pueda llegar a `192.168.56.10:8080`
@@ -76,12 +78,16 @@ alias dc2='docker --context cna-node1 compose -p vm2 -f deploy/vm2/docker-compos
 |---|---|
 | **F7-E9** | Grafana → Dashboards → *Libre Closet CNA · RED por servicio*. Que se vean los paneles de tasa, errores, latencia p50/p95/p99 y colas. Rango: últimos 15 min. |
 | **F7-E10** | En VM-1: `curl -sk -D - -o /dev/null $API/v2/calendar \| grep -i x-request-id`. Copiá el valor, pegalo en la caja *request_id* arriba del tablero. El panel de logs muestra la línea del **gateway** y la de **calendar-svc** con el mismo id. |
-| **F7-E11** | No hay trazas distribuidas (OpenTelemetry quedó fuera de alcance): se reemplaza por la correlación. Grafana → Explore → Loki → `{job="docker"} \|= "<event_id>"` usando un `event_id` de un evento real (sale en `docker logs event-bridge \| tail`). Se ve el mismo evento en event-bridge, calendar-svc y wear-stats-svc. |
+| **F7-E11** | **Traza distribuida en Jaeger.** En la web marcá un outfit como usado. En Jaeger (<http://localhost:16686>): *Service* = `event-bridge` → *Find Traces* → abrí la traza `cdc closet.calendar.updated`. Se ven los tramos y su duración: `cdc …` (event-bridge) → `consumir …` en **calendar-svc** (con `monolito: verificar outfit` → `GET /outfits/{id}` y `postgres: aplicar evento`) y en **wear-stats-svc** (con `redis: aplicar uso` y `publicar stats.outfit.worn`). Captura con la vista de tramos expandida. |
 | **F7-E12** | Se saca durante X1b (ver abajo): Prometheus → *Alerts* con `ServicioCaido` en **FIRING**. Con X3b sale `MensajesEnDLQ`. |
 
+> Desde Grafana también se puede saltar del log a la traza: en Explore → Loki, abrí una línea que tenga
+> `trace_id` y tocá el enlace **trace_id → Jaeger**.
+>
 > Para la defensa: el `request_id` lo genera Nginx y viaja en el header `X-Request-ID` hasta el
 > servicio; en los eventos, el bridge pone un `request_id` nuevo en el sobre y cada consumidor lo
-> escribe en sus logs. Por eso se puede seguir una operación entre máquinas sin tener tracing.
+> escribe en sus logs. La traza, en cambio, viaja en el header W3C `traceparent` (HTTP y mensajes de
+> RabbitMQ): cada servicio crea sus tramos con OpenTelemetry y los manda por OTLP a Jaeger.
 
 ---
 
@@ -230,7 +236,43 @@ Captura **F7-E4**: el 503 + el monolito en 200 + el slot con WAL retenido + el o
 MTTR: desde que arrancás VM-2 hasta que el sondeo vuelve a 200 (incluye el arranque de la VM).
 Después de esto conviene volver a abrir el túnel de Grafana.
 
-### X5 — 2 s de latencia hacia Internet: timeout, reintentos y circuito de S3 (F7-E5)
+### X5 — 2 s de latencia hacia el monolito: timeout, reintentos y circuito de S1 (F7-E5)
+
+Es el X5 tal como lo pide la consigna (latencia hacia la API del monolito con `tc netem`).
+Hipótesis: con el monolito lento, calendar-svc corta cada intento a los 3 s, reintenta con backoff
+exponencial (3 intentos), y tras 5 fallos abre el circuito y deja de llamar; mientras tanto sigue
+procesando eventos (degradado, sin verificar) y `/v2/calendar` responde rápido, sin trabarse.
+
+**En VM-2** (`ssh -p 2223 admins@127.0.0.1`): latencia solo hacia `192.168.56.10:443`, por la red interna:
+
+```bash
+sudo tc qdisc add dev enp0s8 root handle 1: prio
+sudo tc qdisc add dev enp0s8 parent 1:3 handle 30: netem delay 2000ms
+sudo tc filter add dev enp0s8 protocol ip parent 1:0 prio 3 u32 \
+  match ip dst 192.168.56.10/32 match ip dport 443 0xffff flowid 1:3
+date +%T
+```
+
+En la web, marcá y desmarcá como usado **6 o 7 veces seguidas** un outfit del calendario
+(cada cambio es un evento que S1 tiene que verificar). En VM-1:
+
+```bash
+$N2 logs --since 3m vm2-calendar-svc-1 | grep -E 'monolito no disponible|circuito abierto' | tail -8
+for i in 1 2 3; do /usr/bin/time -f '%e s' curl -sk -o /dev/null -w '%{http_code} ' $API/v2/calendar; done
+```
+
+Lo esperable: los primeros avisos dicen `circuito=closed`, después `circuito=open` y aparece
+`circuito abierto: no se verifica el outfit`; los `curl` a `/v2/calendar` siguen en 200 y en
+milisegundos (los hilos no se saturan). En **Jaeger**, la traza de uno de esos eventos muestra los
+3 intentos `GET /outfits/{id}` de ~3 s cada uno, con error, dentro de `monolito: verificar outfit`.
+
+**Quitá la latencia en VM-2** (importante): `sudo tc qdisc del dev enp0s8 root`.
+A los 30 s el circuito pasa a *half_open* y con el siguiente evento se cierra solo.
+
+Captura **F7-E5**: los logs con el circuito abriéndose, los `curl` rápidos y la traza en Jaeger con
+los reintentos. (Si te sobra tiempo, el X5b de abajo muestra lo mismo para S3.)
+
+### X5b (opcional) — 2 s de latencia hacia Internet: S3 y Open-Meteo
 
 Hipótesis: con Open-Meteo lento, weather-svc corta a los 2 s, reintenta, abre el circuito y responde
 con la copia vieja (`"cache":"stale"`) o con 503, sin quedarse colgado.
@@ -266,8 +308,8 @@ cuando el circuito se abre, responden al instante. Si el puerto 8003 no responde
 sudo tc qdisc del dev $IF root
 ```
 
-A los 30 s el circuito pasa a *half_open* y con el siguiente pedido se cierra. Captura **F7-E5**:
-los tiempos, el `stale`, el 503 del lugar nuevo y el `readyz` con el circuito abierto.
+A los 30 s el circuito pasa a *half_open* y con el siguiente pedido se cierra. Si lo hacés, sirve
+como captura adicional de F7-E5: los tiempos, el `stale`, el 503 del lugar nuevo y el `readyz`.
 
 ---
 

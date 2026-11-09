@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from opentelemetry import context as otel_context, trace as otel_trace
+
+from .tracing import SpanKind, Status, StatusCode, current_trace_id, extract, tracer
+
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 HTTP_REQUESTS = Counter("http_requests_total", "Peticiones HTTP por ruta y código", ["route", "code"])
@@ -34,6 +38,9 @@ class JsonFormatter(logging.Formatter):
             "request_id": getattr(record, "request_id", None) or request_id_var.get(),
             "message": record.getMessage(),
         }
+        trace_id = current_trace_id()
+        if trace_id:
+            entry["trace_id"] = trace_id  # permite saltar del log en Loki a la traza en Jaeger
         extra = getattr(record, "extra_fields", None)
         if extra:
             entry.update(extra)
@@ -65,6 +72,14 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         route = request.url.path
         start = time.perf_counter()
         code = 500
+        traced = route not in ("/metrics", "/healthz", "/readyz")
+        span = tracer.start_span(
+            f"{request.method} {route}", context=extract(request.headers), kind=SpanKind.SERVER,
+            attributes={"http.request.method": request.method, "url.path": route, "request_id": request_id},
+        ) if traced else None
+        span_token = None
+        if span is not None:
+            span_token = otel_context.attach(otel_trace.set_span_in_context(span))
         try:
             response = await call_next(request)
             code = response.status_code
@@ -79,3 +94,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     extra={"extra_fields": {"duration_ms": round((time.perf_counter() - start) * 1000, 1)}},
                 )
             request_id_var.reset(token)
+            if span is not None:
+                span.set_attribute("http.response.status_code", code)
+                if code >= 500:
+                    span.set_status(Status(StatusCode.ERROR))
+                span.end()
+                otel_context.detach(span_token)

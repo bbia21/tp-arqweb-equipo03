@@ -52,6 +52,21 @@ services:
           cpus: "0.25"
           memory: 96M
 
+  jaeger:
+    # Trazas distribuidas (C3). Jaeger v2: recibe OTLP en 4318 y guarda en memoria (alcanza para la demo).
+    image: jaegertracing/jaeger:2.19.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686"   # interfaz web, por túnel SSH
+      # OTLP/HTTP: lo usan los servicios de VM-2 por la red interna y el event-bridge de VM-1
+      # (DOCKER-USER solo deja entrar desde 192.168.56.10)
+      - "4318:4318"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
   grafana:
     build: ./grafana
     image: cna-grafana:${IMAGE_TAG:-1.0.0}
