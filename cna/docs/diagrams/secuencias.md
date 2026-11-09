@@ -1,74 +1,67 @@
 # Diagramas de secuencia (F5-E7)
 
-## 1. Marcar un outfit como usado → calendario y estadísticas actualizados (asíncrono)
+## 1. Marcar un outfit como usado → calendario y estadísticas (asíncrono)
 
 ```mermaid
 sequenceDiagram
   autonumber
   actor U as Usuaria
-  participant N as Nginx (VM-1)
-  participant L as Libre Closet
-  participant P as PostgreSQL
-  participant B as event-bridge
-  participant R as RabbitMQ (VM-2)
-  participant S1 as calendar-svc
-  participant S2 as wear-stats-svc
+  participant L as Nginx + Libre Closet<br/>(VM-1)
+  participant P as PostgreSQL<br/>(VM-1)
+  participant B as event-bridge<br/>(VM-1)
+  participant R as RabbitMQ<br/>(VM-2)
+  participant S1 as calendar-svc<br/>(VM-2)
+  participant S2 as wear-stats-svc<br/>(VM-2)
 
-  U->>N: POST /calendar/17/worn (HTTPS)
-  N->>L: proxy (X-Request-ID)
-  L->>P: UPDATE outfit_calendar SET worn_at = now()
-  P-->>L: COMMIT
-  L-->>U: 200 (HTMX)
-  P-->>B: cambio por replicación lógica (pgoutput)
-  B->>R: publish closet.calendar.updated (persistente)
-  R-->>B: confirm
-  B->>P: acknowledge(LSN)
-  par cola calendar.q
-    R->>S1: entrega
-    S1->>S1: INSERT processed_event + UPSERT calendar_entry (una transacción)
-    S1-->>R: ack
-  and cola stats.q
-    R->>S2: entrega
-    S2->>S2: script Lua: SET processed:<event_id> NX + HINCRBY worn
-    S2-->>R: ack
-  end
+  U->>L: marcar outfit como usado (HTTPS)
+  L->>P: UPDATE outfit_calendar SET worn_at
+  L-->>U: 200
+  P-->>B: cambio por replicación lógica
+  B->>R: publica closet.calendar.updated
+  R-->>B: confirmación (publisher confirm)
+  B->>P: confirma la posición del WAL
+  R->>S1: entrega desde calendar.q
+  S1->>S1: guarda event_id y la entrada
+  S1-->>R: ack
+  R->>S2: entrega desde stats.q
+  S2->>S2: suma 1 si el event_id es nuevo
+  S2-->>R: ack
 
-  alt S2 caído o con error transitorio
-    R-->>R: el mensaje espera en stats.q (o se reencola con nack)
-    Note over R,S2: al volver S2 procesa lo pendiente (CA-6); a los 5 intentos va a closet.dlq
+  alt S2 caído
+    Note over R,S2: el mensaje espera en stats.q y se procesa cuando S2 vuelve
   else evento inválido
-    S1-->>R: nack sin reencolar
-    R->>R: closet.dlx → closet.dlq
+    S2-->>R: nack sin reencolar
+    Note over R: el mensaje pasa a closet.dlq
   else RabbitMQ caído
-    B--xR: publish falla
-    Note over B,P: sin acknowledge: PostgreSQL reenvía el cambio cuando el bridge reconecta
+    B--xR: no puede publicar
+    Note over B,P: sin confirmación, PostgreSQL reenvía el cambio al reconectar
   end
 ```
 
-## 2. Consulta del calendario (síncrona)
+## 2. Consulta del calendario (síncrono)
 
 ```mermaid
 sequenceDiagram
   autonumber
   actor C as Cliente
-  participant N as Nginx (VM-1)
-  participant S1 as calendar-svc (VM-2)
-  participant D as calendar-db
+  participant N as Nginx<br/>(VM-1)
+  participant S1 as calendar-svc<br/>(VM-2)
+  participant D as calendar-db<br/>(VM-2)
 
-  C->>N: GET https://api.librecloset.arqweb.test/v2/calendar/today
-  N->>N: genera X-Request-ID, aplica limit_req (20 r/s)
-  alt dentro del límite
-    N->>S1: GET /v2/calendar/today (X-Request-ID)
-    S1->>D: SELECT entradas de hoy (UTC)
+  C->>N: GET /v2/calendar/today
+  Note over N: genera X-Request-ID y aplica el límite de 20 r/s
+  alt dentro del límite y S1 disponible
+    N->>S1: GET /v2/calendar/today
+    S1->>D: SELECT entradas de hoy
     D-->>S1: filas
-    S1-->>N: 200 JSON (o 404 si no hay outfit hoy)
+    S1-->>N: 200 JSON
     N-->>C: 200 JSON + X-Request-ID
   else S1 caído o sin respuesta en 5 s
-    N--xS1: connection refused / timeout
-    N-->>C: 503 {"error":"service_unavailable","request_id":...}
-    Note over N,C: el monolito sigue respondiendo 200 (CA-5)
+    N--xS1: conexión rechazada / timeout
+    N-->>C: 503 JSON service_unavailable
+    Note over C,N: el monolito sigue respondiendo 200 (CA-5)
   else más de 20 r/s
-    N-->>C: 429 {"error":"too_many_requests"}
+    N-->>C: 429 JSON too_many_requests
   end
 ```
 
@@ -78,29 +71,27 @@ sequenceDiagram
 sequenceDiagram
   autonumber
   actor C as Cliente
-  participant N as Nginx (VM-1)
-  participant S3 as weather-svc (VM-2)
-  participant K as weather-cache (Redis)
-  participant O as Open-Meteo
+  participant S3 as weather-svc<br/>(VM-2, vía Nginx)
+  participant K as weather-cache<br/>(Redis)
+  participant O as Open-Meteo<br/>(externo)
 
-  C->>N: GET /v2/weather?lat=-25.28&lon=-57.63
-  N->>S3: proxy (X-Request-ID)
-  S3->>K: GET weather:-25.28:-57.63:celsius:<hoy>
-  alt cache hit
+  C->>S3: GET /v2/weather?lat=-25.28&lon=-57.63
+  S3->>K: busca el pronóstico de hoy
+  alt está en caché
     K-->>S3: pronóstico
-    S3-->>C: 200 (cache=hit)
-  else cache miss y circuito cerrado
-    S3->>O: GET /v1/forecast (timeout 2 s, hasta 3 intentos con backoff)
+    S3-->>C: 200 (cache = hit)
+  else no está y el circuito está cerrado
+    S3->>O: GET /v1/forecast (timeout 2 s, 3 intentos)
     O-->>S3: pronóstico
-    S3->>K: SET con TTL 30 min + copia stale 24 h
-    S3-->>C: 200 (cache=miss)
-  else Open-Meteo lento o caído (o circuito abierto tras 5 fallas)
+    S3->>K: guarda 30 min + copia vieja 24 h
+    S3-->>C: 200 (cache = miss)
+  else Open-Meteo falla o el circuito está abierto
     S3--xO: timeout / error
-    S3->>K: GET stale:<clave>
+    S3->>K: busca la copia vieja
     alt hay copia vieja
-      S3-->>C: 200 (cache=stale, circuit=open)
+      S3-->>C: 200 (cache = stale)
     else no hay copia
-      S3-->>C: 503 {"error":"service_unavailable"}
+      S3-->>C: 503 JSON service_unavailable
     end
   end
 ```
