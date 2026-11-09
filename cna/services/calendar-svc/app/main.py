@@ -24,7 +24,7 @@ async def lifespan(_app: FastAPI):
     state["pool"] = await db.connect(settings.database_url)
     state["monolith"] = MonolithClient(
         settings.monolith_url, settings.svc_email, settings.svc_password,
-        settings.monolith_timeout_seconds, settings.monolith_verify_tls,
+        settings.monolith_timeout_seconds, settings.monolith_verify_tls, settings.svc_password_file,
     )
     state["consumer"] = Consumer(settings.amqp_url, settings.queue, state["pool"], state["monolith"])
     consumer_task = asyncio.create_task(state["consumer"].start())

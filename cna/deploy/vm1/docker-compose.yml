@@ -20,7 +20,8 @@ services:
       # Permite llegar a RabbitMQ cuando corre en la misma VM (RABBIT_HOST=host.docker.internal)
       - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:8080:8080"
+      # Solo en la red interna: lo lee Prometheus desde VM-2
+      - "192.168.56.10:8080:8080"
     read_only: true
     networks:
       - closet
@@ -29,6 +30,25 @@ services:
         limits:
           cpus: "0.5"
           memory: 128M
+
+  # Envía a Loki (VM-2) los logs de los contenedores de VM-1 y el log JSON del gateway
+  promtail:
+    build:
+      context: ../../observability/promtail
+      args:
+        CONFIG: promtail-vm1.yml
+    image: cna-promtail-vm1:${IMAGE_TAG:-1.0.0}
+    container_name: promtail
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/nginx:/var/log/nginx:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 96M
 
 networks:
   closet:

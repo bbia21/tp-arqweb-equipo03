@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     monolith_verify_tls: bool = False
     svc_email: str = ""
     svc_password: str = ""
+    # Rotación sin reinicio (C4): si este archivo existe, su contenido reemplaza a SVC_PASSWORD
+    svc_password_file: str = "/tmp/svc_password"
     monolith_timeout_seconds: float = 1.0
 
     # Zona horaria para "hoy"

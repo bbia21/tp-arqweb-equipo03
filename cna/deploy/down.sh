@@ -8,5 +8,6 @@ VOL=()
 [ "${BORRAR_DATOS:-0}" = 1 ] && VOL=(--volumes)
 
 docker compose -p vm1 -f "$CNA/deploy/vm1/docker-compose.yml" --env-file "$CNA/deploy/vm1/.env" down "${VOL[@]}"
+docker --context "$CONTEXT" compose -p obs -f "$CNA/observability/docker-compose.yml" --env-file "$CNA/deploy/vm2/.env" down "${VOL[@]}"
 docker --context "$CONTEXT" compose -p vm2 -f "$CNA/deploy/vm2/docker-compose.yml" --env-file "$CNA/deploy/vm2/.env" down "${VOL[@]}"
 echo "Parte cloud native detenida. El monolito sigue corriendo."

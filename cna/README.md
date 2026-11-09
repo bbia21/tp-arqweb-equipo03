@@ -88,3 +88,16 @@ docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c "npm ci && npm test"
 3. Recién entonces le confirma a PostgreSQL la posición (`acknowledge`).
 4. Si el bridge o RabbitMQ se caen antes del paso 3, PostgreSQL vuelve a enviar esos cambios al reconectar.
    Por eso los consumidores deben ser idempotentes por `event_id` (ADR-010).
+
+## Observabilidad, caos y carga (Fase 7)
+
+`make up` también levanta, en VM-2, Prometheus (métricas y alertas), Loki + Promtail (logs de los
+dos nodos y del gateway) y Grafana con el tablero RED ya cargado. Se accede por túnel SSH:
+
+```powershell
+ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 admins@127.0.0.1
+```
+
+- `observability/` — configuración de Prometheus, alertas, Loki/Promtail y Grafana (se copian dentro de las imágenes).
+- `perf/load.js` — prueba de carga k6 (monolito vs S1, escalado de S3); `perf/sondeo.sh` mide el MTTR.
+- `docs/fase7-guion.md` — guion paso a paso de los experimentos X1–X5, k6, Trivy/SBOM y rotación de credenciales.

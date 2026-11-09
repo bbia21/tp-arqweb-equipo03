@@ -1,0 +1,40 @@
+# Reglas de alerta (C3). Se ven en http://localhost:9090/alerts (con el túnel SSH a VM-2).
+groups:
+  - name: libre-closet-cna
+    rules:
+      - alert: ServicioCaido
+        expr: up == 0
+        for: 15s
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} no responde a Prometheus"
+          description: "El objetivo {{ $labels.instance }} del job {{ $labels.job }} está caído hace más de 15 s."
+
+      - alert: MensajesEnDLQ
+        expr: rabbitmq_queue_messages_ready{queue="closet.dlq"} > 0
+        for: 15s
+        labels: { severity: warning }
+        annotations:
+          summary: "Hay {{ $value }} mensajes en closet.dlq"
+          description: "Algún consumidor rechazó eventos inválidos o agotó los 5 reintentos. Revisar la DLQ."
+
+      - alert: TasaErrores5xx
+        expr: |
+          (
+            sum by (job) (rate(http_requests_total{code=~"5.."}[1m]))
+            /
+            sum by (job) (rate(http_requests_total[1m]))
+          ) > 0.05
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.job }}: más del 5 % de respuestas 5xx durante 1 minuto"
+          description: "Tasa de errores actual: {{ $value | humanizePercentage }}."
+
+      - alert: ColaAcumulada
+        expr: rabbitmq_queue_messages_ready{queue=~"calendar.q|stats.q"} > 10
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "La cola {{ $labels.queue }} acumula {{ $value }} mensajes"
+          description: "Su consumidor está caído o no da abasto."

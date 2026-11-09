@@ -3,7 +3,7 @@
 #   make down     baja la parte cloud native (el monolito sigue corriendo)
 #   make status   estado de los contenedores en los dos nodos
 #   make test     pruebas automatizadas de todos los servicios
-#   make lint-contracts   valida OpenAPI (Spectral) y AsyncAPI (F5-E4)
+#   make lint-contracts   valida OpenAPI con Spectral (AsyncAPI: AsyncAPI Studio, F5-E4)
 .PHONY: up down status lint-contracts test test-bridge test-stats test-calendar test-weather
 
 up:

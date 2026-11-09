@@ -5,6 +5,7 @@ backoff exponencial e interruptor de circuito (experimento X5). Si el monolito n
 responde, el servicio degrada: guarda la entrada igual y lo deja registrado en el log.
 """
 import logging
+import os
 
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -19,10 +20,13 @@ class OutfitNotFound(Exception):
 
 
 class MonolithClient:
-    def __init__(self, base_url: str, email: str, password: str, timeout: float, verify_tls: bool):
+    def __init__(self, base_url: str, email: str, password: str, timeout: float, verify_tls: bool,
+                 password_file: str = ""):
         self.base_url = base_url.rstrip("/")
         self.email = email
         self.password = password
+        self.password_file = password_file
+        self.password_mtime = None
         self.client = httpx.AsyncClient(timeout=timeout, verify=verify_tls, follow_redirects=False)
         self.breaker = CircuitBreaker(fail_max=5, reset_timeout=30)
         self.logged_in = False
@@ -31,9 +35,30 @@ class MonolithClient:
     def enabled(self) -> bool:
         return bool(self.base_url and self.email and self.password)
 
+    def _current_password(self) -> str:
+        """Contraseña vigente: la del archivo de rotación si existe, si no la de la variable de entorno."""
+        if self.password_file and os.path.exists(self.password_file):
+            with open(self.password_file, encoding="utf-8") as f:
+                value = f.read().strip()
+            if value:
+                return value
+        return self.password
+
+    def _check_rotation(self) -> None:
+        """Si el archivo de rotación cambió, descarta la sesión para volver a entrar con la clave nueva."""
+        if not self.password_file or not os.path.exists(self.password_file):
+            return
+        mtime = os.path.getmtime(self.password_file)
+        if mtime != self.password_mtime:
+            if self.password_mtime is not None or self.logged_in:
+                log.info("credencial del usuario de servicio rotada: se renueva la sesión")
+            self.password_mtime = mtime
+            self.logged_in = False
+            self.client.cookies.clear()
+
     async def _login(self) -> None:
         response = await self.client.post(
-            f"{self.base_url}/auth/login", data={"email": self.email, "password": self.password}
+            f"{self.base_url}/auth/login", data={"email": self.email, "password": self._current_password()}
         )
         if "access_token" not in self.client.cookies:
             raise RuntimeError(f"login del usuario de servicio falló (HTTP {response.status_code})")
@@ -53,6 +78,7 @@ class MonolithClient:
         """True / False si el monolito respondió; None si no se pudo verificar (degradación)."""
         if not self.enabled:
             return None
+        self._check_rotation()
         try:
             self.breaker.before_call()
         except CircuitOpenError:

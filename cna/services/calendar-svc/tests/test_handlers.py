@@ -58,3 +58,15 @@ def test_circuito_se_abre_tras_fallas_y_se_recupera():
     breaker.before_call()
     breaker.record_success()
     assert breaker.state == "closed"
+
+
+def test_rotacion_usa_la_clave_del_archivo(tmp_path):
+    from app.monolith import MonolithClient
+    archivo = tmp_path / "svc_password"
+    cliente = MonolithClient("https://x", "svc@x", "clave-vieja", 1.0, False, str(archivo))
+    assert cliente._current_password() == "clave-vieja"
+    archivo.write_text("clave-nueva\n")
+    assert cliente._current_password() == "clave-nueva"
+    cliente.logged_in = True
+    cliente._check_rotation()
+    assert cliente.logged_in is False

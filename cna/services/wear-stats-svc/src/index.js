@@ -14,6 +14,9 @@ const config = {
   queue: process.env.QUEUE || 'stats.q',
   exchange: process.env.EXCHANGE || 'closet.events',
   publishWorn: process.env.PUBLISH_WORN !== 'false',
+  // Solo para el experimento X3: espera entre aplicar el evento y confirmarlo (ack),
+  // para poder matar el proceso justo en ese momento. En operación normal es 0.
+  ackDelayMs: Number(process.env.ACK_DELAY_MS || 0),
 };
 
 // Logs JSON: timestamp, level, service, request_id, message
@@ -56,6 +59,10 @@ async function handle(channel, publishChannel, msg) {
         headers: { 'x-request-id': requestId },
       });
       await publishChannel.waitForConfirms();
+    }
+    if (config.ackDelayMs > 0) {
+      log.warn({ request_id: requestId, event_id: event.event_id }, `evento aplicado; ack en ${config.ackDelayMs} ms (X3)`);
+      await new Promise((r) => setTimeout(r, config.ackDelayMs));
     }
     channel.ack(msg);
     const result = applied === 1 ? 'processed' : 'duplicate';

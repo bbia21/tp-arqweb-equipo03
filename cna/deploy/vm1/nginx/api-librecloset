@@ -4,7 +4,12 @@ log_format api_json escape=json '{"timestamp":"$time_iso8601","service":"gateway
 
 upstream calendar_svc { server 192.168.56.11:8001; keepalive 8; }
 upstream stats_svc    { server 192.168.56.11:8002; keepalive 8; }
-upstream weather_svc  { server 192.168.56.11:8003; keepalive 8; }
+upstream weather_svc  {
+    server 192.168.56.11:8003 max_fails=1 fail_timeout=10s;
+    server 192.168.56.11:8004 max_fails=1 fail_timeout=10s;
+    server 192.168.56.11:8005 max_fails=1 fail_timeout=10s;
+    keepalive 8;
+}
 
 server {
     listen 80;

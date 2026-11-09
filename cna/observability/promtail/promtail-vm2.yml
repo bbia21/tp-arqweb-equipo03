@@ -1,0 +1,31 @@
+# Promtail en VM-2: envía a Loki los logs de todos los contenedores del nodo.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+positions:
+  filename: /tmp/positions.yaml
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - target_label: job
+        replacement: docker
+      - target_label: node
+        replacement: cna-node1
+    pipeline_stages:
+      # Los servicios escriben JSON: se extraen service y level como etiquetas.
+      # request_id NO se usa como etiqueta (demasiados valores); se busca con |= o | json.
+      - json:
+          expressions:
+            service: service
+            level: level
+      - labels:
+          service:
+          level:

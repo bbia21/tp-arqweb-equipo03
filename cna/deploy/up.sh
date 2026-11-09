@@ -52,6 +52,7 @@ asegurar "$VM2/.env" CALENDAR_DB_PASSWORD "$(rand)"
 asegurar "$VM2/.env" MONOLITH_URL ""
 asegurar "$VM2/.env" SVC_EMAIL ""
 asegurar "$VM2/.env" SVC_PASSWORD ""
+asegurar "$VM2/.env" GRAFANA_ADMIN_PASSWORD "$(rand)"
 
 CDC=$(leer "$VM1/.env" CDC_PASSWORD)
 [ -n "$CDC" ] || CDC=$(leer /srv/libre-closet/.env CDC_PASSWORD)
@@ -95,6 +96,7 @@ docker context inspect "$CONTEXT" >/dev/null 2>&1 \
   || docker context create "$CONTEXT" --docker "host=ssh://$VM2_SSH" >/dev/null
 DC2=(docker --context "$CONTEXT" compose -p vm2 -f "$VM2/docker-compose.yml" --env-file "$VM2/.env")
 DC1=(docker compose -p vm1 -f "$VM1/docker-compose.yml" --env-file "$VM1/.env")
+DCO=(docker --context "$CONTEXT" compose -p obs -f "$CNA/observability/docker-compose.yml" --env-file "$VM2/.env")
 ok "contexto de Docker '$CONTEXT'"
 
 # ---------------------------------------------------------------- 4. RabbitMQ
@@ -114,9 +116,10 @@ paso "5/7 Microservicios en VM-2 (S1, S2, S3 y sus almacenes)"
 "${DC2[@]}" up -d --wait
 ok "servicios healthy en VM-2"
 
-paso "6/7 event-bridge en VM-1"
-"${DC1[@]}" up -d --wait
-ok "event-bridge healthy"
+paso "6/7 Observabilidad en VM-2 (Prometheus, Loki, Promtail, Grafana) y event-bridge en VM-1"
+"${DCO[@]}" up -d --build
+"${DC1[@]}" up -d --build --wait
+ok "observabilidad levantada y event-bridge healthy"
 
 # ---------------------------------------------------------------- 6. Gateway
 paso "7/7 Gateway Nginx y prueba de humo por el 443"
@@ -144,3 +147,5 @@ printf '    S2  /v2/stats/outfits/top    -> %s\n' "$(api /v2/stats/outfits/top)"
 printf '    S3  /v2/weather              -> %s\n' "$(api '/v2/weather?lat=-25.28&lon=-57.63&days=1')"
 
 printf '\n\033[1;32mListo en %s segundos.\033[0m\n' "$(( $(date +%s) - INICIO ))"
+printf '    Grafana:    ssh -p 2223 -L 3000:localhost:3000 -L 9090:localhost:9090 admins@127.0.0.1  (desde Windows)\n'
+printf '                luego http://localhost:3000  (usuario admin, clave: GRAFANA_ADMIN_PASSWORD en deploy/vm2/.env)\n'

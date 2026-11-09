@@ -98,6 +98,7 @@ services:
     image: wear-stats-svc:${IMAGE_TAG:-1.0.0}
     restart: unless-stopped
     environment:
+      ACK_DELAY_MS: "${STATS_ACK_DELAY_MS:-0}"   # solo para X3 (Fase 7)
       REDIS_URL: redis://stats-db:6379/0
       AMQP_URL: "amqp://${RABBIT_STATS_USER}:${RABBIT_STATS_PASSWORD}@rabbitmq:5672"
       QUEUE: stats.q
@@ -129,7 +130,7 @@ services:
     environment:
       REDIS_URL: redis://weather-cache:6379/0
     ports:
-      - "8003:8000"
+      - "8003-8005:8000"   # rango: permite docker compose up --scale weather-svc=3 (C2)
     read_only: true
     tmpfs:
       - /tmp
